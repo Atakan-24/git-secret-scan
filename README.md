@@ -64,4 +64,6 @@ once: `git commit --no-verify`.
 
 ## License
 
-MIT — see `LICENSE`.
+All rights reserved. This code is shared here to read as a work sample —
+it is **not** licensed for reuse, redistribution, or modification. If
+you'd like to use it in your own project, reach out first.
