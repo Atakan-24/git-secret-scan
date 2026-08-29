@@ -121,12 +121,17 @@ jobs:
           git add planted.py
           git commit -q -m "planted credential (test)"
 
+      # Scanned with mode: tracked, not changes. "changes" resolves to the
+      # range that was actually pushed, and a commit created here inside
+      # the job is outside it — the first version of this test used
+      # "changes", saw 0 findings, and would have shipped an action nobody
+      # had ever watched fail.
       - name: The action must now fail
         uses: ./
         id: planted
         continue-on-error: true
         with:
-          mode: changes
+          mode: tracked
 
       - name: Verify it failed and counted the finding
         run: |
