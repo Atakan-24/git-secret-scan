@@ -47,10 +47,14 @@ def main():
             backup.write_text(existing, encoding='utf-8')
             print(f'Existing hook backed up to {backup.name} — merge it by hand.')
 
-    target.write_text(
-        HOOK_TEMPLATE.format(python=Path(sys.executable).as_posix(),
-                             scan_py=SCAN_PY.as_posix()),
-        encoding='utf-8', newline='\n')
+    hook = HOOK_TEMPLATE.format(python=Path(sys.executable).as_posix(),
+                                scan_py=SCAN_PY.as_posix())
+    # write_bytes, not write_text: the hook is a shell script and must keep
+    # LF endings on every platform — CRLF makes /bin/sh fail with a
+    # famously unhelpful error. write_text(newline=…) would express that
+    # directly but only exists on Python 3.10+, and this supports 3.9.
+    # (Found by the CI matrix, not locally: the dev machine runs 3.12.)
+    target.write_bytes(hook.encode('utf-8'))
     target.chmod(0o755)
     print(f'pre-commit hook installed: {target}')
     return 0
