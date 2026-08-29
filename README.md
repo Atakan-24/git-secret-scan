@@ -1,7 +1,7 @@
 # git-secret-scan
 
 [![CI](https://github.com/Atakan-24/git-secret-scan/actions/workflows/ci.yml/badge.svg)](https://github.com/Atakan-24/git-secret-scan/actions/workflows/ci.yml)
-![coverage 99%](https://img.shields.io/badge/coverage-99%25-brightgreen)
+![coverage 98%](https://img.shields.io/badge/coverage-98%25-brightgreen)
 ![precision 100%](https://img.shields.io/badge/precision-100%25-brightgreen)
 ![recall 100%](https://img.shields.io/badge/recall-100%25-brightgreen)
 ![dependencies none](https://img.shields.io/badge/dependencies-none-blue)
@@ -64,6 +64,37 @@ interpreter that installed it, because `python` is frequently absent from
 the minimal environment git gives a hook.
 
 An existing foreign `pre-commit` hook is backed up, never overwritten.
+
+## Use it in CI
+
+The hook protects the developer who installed it. The GitHub Action
+protects the repository from everyone else — including the developer who
+used `--no-verify`.
+
+```yaml
+- uses: actions/checkout@v4
+  with: { fetch-depth: 0 }
+- uses: Atakan-24/git-secret-scan@main
+  with:
+    mode: changes          # default: only what this PR introduces
+```
+
+`mode: changes` is the one that matters. Pointing a scanner at an existing
+repository reports every credential ever committed — on day one that is a
+wall of findings nobody can action, and a check that always fails is a
+check that gets deleted. Scanning only what the pull request *adds* passes
+on merge day and fails on what the author actually wrote.
+
+The same logic is available locally:
+
+```bash
+python scan.py --range main..HEAD
+```
+
+The action fails the job on a finding, writes a masked summary to the run
+page, and exposes a `findings` output. A scanner that cannot run exits `2`
+and **always** fails, regardless of `fail-on-finding` — an unusable check
+must never be mistaken for a passing one.
 
 ---
 
@@ -207,7 +238,7 @@ pip install pytest hypothesis coverage ruff
 python -m coverage run -m pytest && python -m coverage report
 ```
 
-**90 tests, 99 % coverage**, across five suites:
+**98 tests, 98 % coverage**, across five suites:
 
 | suite | what it protects |
 |---|---|
@@ -215,7 +246,7 @@ python -m coverage run -m pytest && python -m coverage report
 | `test_false_positives.py` | UUIDs, hashes, base64, semver, prose, placeholders and fixture files stay silent |
 | `test_regressions.py` | one test per bug above — they cannot come back |
 | `test_properties.py` | property-based (Hypothesis): never crashes on arbitrary bytes, line numbers always in range, **masking never leaks the secret body**, detection independent of position, benign text never silences a finding, deterministic |
-| `test_cli.py` / `test_main.py` | real `git init` repositories, real commits, an installed hook actually blocking one |
+|  `test_cli.py` / `test_main.py` / `test_range.py` | real `git init` repositories, real commits, an installed hook actually blocking one |
 
 CI runs on **Linux, macOS and Windows × Python 3.9 and 3.13** — the tool
 installs on whatever machine a developer has, so that claim gets tested

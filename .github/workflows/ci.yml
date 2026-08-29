@@ -84,3 +84,54 @@ jobs:
         run: python scan.py --tracked
       - name: Scan the entire history
         run: python scan.py --history
+
+  action:
+    name: the action runs itself
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Uses the action from this checkout rather than a published tag, so
+      # a change to action.yml is tested by the same commit that makes it.
+      - name: Scan this change with the action
+        uses: ./
+        id: clean
+        with:
+          mode: changes
+
+      - name: The clean run must report zero findings
+        run: |
+          test "${{ steps.clean.outputs.findings }}" = "0" \
+            || { echo "expected 0, got ${{ steps.clean.outputs.findings }}"; exit 1; }
+
+      # The important half: prove it actually fails when it should. An
+      # action that has only ever been observed passing is untested.
+      - name: Plant a synthetic credential
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, 'tests')
+          from fixtures.synthetic_secrets import SYNTHETIC
+          open('planted.py', 'wb').write(b'KEY = "' + SYNTHETIC['AWS access key id'] + b'"\n')
+          PY
+          git config user.email ci@example.invalid
+          git config user.name ci
+          git add planted.py
+          git commit -q -m "planted credential (test)"
+
+      - name: The action must now fail
+        uses: ./
+        id: planted
+        continue-on-error: true
+        with:
+          mode: changes
+
+      - name: Verify it failed and counted the finding
+        run: |
+          test "${{ steps.planted.outcome }}" = "failure" \
+            || { echo "the action passed on a planted credential"; exit 1; }
+          test "${{ steps.planted.outputs.findings }}" = "1" \
+            || { echo "expected 1 finding, got ${{ steps.planted.outputs.findings }}"; exit 1; }
+          echo "Correctly blocked a planted credential and reported 1 finding."

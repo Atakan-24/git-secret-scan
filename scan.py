@@ -179,11 +179,30 @@ def blobs_history():
             yield f'blob {sha[:10]}', git('cat-file', 'blob', sha, check=False)
 
 
+def files_in_range(rev_range: str):
+    """Files added or modified within a commit range.
+
+    This is the mode that makes the tool adoptable in CI. Pointing
+    --tracked at somebody else's repository reports every credential ever
+    committed, which on day one is a wall of findings nobody can action —
+    and a wall of findings is indistinguishable from noise. Scanning only
+    what a pull request introduces makes the check pass on merge day and
+    fail only on what the author actually added.
+    """
+    names = git('diff', '--name-only', '--diff-filter=ACM', rev_range)
+    head = rev_range.split('..')[-1] or 'HEAD'
+    for raw in names.split(b'\n'):
+        if not raw.strip():
+            continue
+        name = raw.decode('utf-8', 'replace')
+        yield name, git('show', f'{head}:{name}', check=False)
+
+
 SOURCES = {'--staged': files_staged, '--tracked': files_tracked, '--history': blobs_history}
 
 
-def collect(mode: str):
-    source = SOURCES[mode]
+def collect(mode: str, rev_range=None):
+    source = (lambda: files_in_range(rev_range)) if rev_range else SOURCES[mode]
     hits = []
     for name, data in source():
         if len(data) > MAX_BLOB_BYTES or is_binary(data):
@@ -197,22 +216,32 @@ def main(argv):
     if mode in ('-h', '--help'):
         print(__doc__)
         return 0
-    if mode not in SOURCES:
+
+    rev_range = None
+    if mode == '--range':
+        if len(argv) < 2 or '..' not in argv[1]:
+            print('--range needs a commit range, e.g. --range main..HEAD',
+                  file=sys.stderr)
+            return 2
+        rev_range = argv[1]
+    elif mode not in SOURCES:
         print(__doc__, file=sys.stderr)
         return 2
 
+    label_mode = f'{mode} {rev_range}' if rev_range else mode
+
     try:
-        hits = collect(mode)
+        hits = collect(mode, rev_range)
     except GitError as exc:
         # Loud on purpose: an unusable scanner must not look like a clean one.
-        print(f'secret-scan {mode}: cannot run — {exc}', file=sys.stderr)
+        print(f'secret-scan {label_mode}: cannot run — {exc}', file=sys.stderr)
         return 2
 
     if not hits:
-        print(f'secret-scan {mode}: clean')
+        print(f'secret-scan {label_mode}: clean')
         return 0
 
-    print(f'secret-scan {mode}: {len(hits)} finding(s) — commit stopped\n')
+    print(f'secret-scan {label_mode}: {len(hits)} finding(s) — commit stopped\n')
     for name, lineno, label, masked in hits:
         print(f'  {name}:{lineno}\n    {label}: {masked}')
     print('\nCredentials belong in an untracked .env, not in a versioned file.')

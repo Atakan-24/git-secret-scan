@@ -1,0 +1,117 @@
+name: 'git-secret-scan'
+description: 'Blocks pull requests that introduce API keys, tokens or private keys. No dependencies.'
+author: 'Atakan'
+
+branding:
+  icon: 'shield'
+  color: 'yellow'
+
+inputs:
+  mode:
+    description: >
+      What to scan. "changes" (default) scans only what this pull request
+      or push introduces — the mode that makes the check adoptable in a
+      repository with existing history. "tracked" scans every tracked
+      file. "history" scans every blob ever committed (slow; needs
+      fetch-depth: 0).
+    required: false
+    default: 'changes'
+  fail-on-finding:
+    description: 'Fail the job when a credential is found. Set false to report only.'
+    required: false
+    default: 'true'
+  python-version:
+    description: 'Python used to run the scanner.'
+    required: false
+    default: '3.13'
+
+outputs:
+  findings:
+    description: 'Number of credentials found.'
+    value: ${{ steps.scan.outputs.findings }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Run git-secret-scan
+      id: scan
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        FAIL_ON_FINDING: ${{ inputs.fail-on-finding }}
+        SCANNER_DIR: ${{ github.action_path }}
+      run: |
+        set -uo pipefail
+
+        # Resolve what "changes" means for the event that triggered this.
+        case "$MODE" in
+          changes)
+            if [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ]; then
+              BASE="${{ github.event.pull_request.base.sha }}"
+              HEAD="${{ github.event.pull_request.head.sha }}"
+            else
+              BASE="${{ github.event.before }}"
+              HEAD="${GITHUB_SHA}"
+            fi
+            # A new branch or the first push has an all-zero "before" sha
+            # and no common ancestor to diff against. Falling back to the
+            # full tree is the safe direction: over-reporting is a nuisance,
+            # under-reporting is a leak.
+            if [ -z "${BASE:-}" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+               || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+              echo "No usable base commit — falling back to --tracked."
+              ARGS=(--tracked)
+            else
+              ARGS=(--range "${BASE}..${HEAD}")
+            fi
+            ;;
+          tracked) ARGS=(--tracked) ;;
+          history) ARGS=(--history) ;;
+          *) echo "::error::unknown mode '$MODE' (use changes, tracked or history)"; exit 2 ;;
+        esac
+
+        OUTPUT=$(python "$SCANNER_DIR/scan.py" "${ARGS[@]}" 2>&1) || STATUS=$?
+        STATUS=${STATUS:-0}
+        echo "$OUTPUT"
+
+        COUNT=$(printf '%s' "$OUTPUT" | grep -oE '[0-9]+ finding' | head -1 | cut -d' ' -f1 || true)
+        echo "findings=${COUNT:-0}" >> "$GITHUB_OUTPUT"
+
+        {
+          echo "## git-secret-scan"
+          echo
+          if [ "$STATUS" -eq 0 ]; then
+            echo "No credentials found in the scanned changes."
+          elif [ "$STATUS" -eq 1 ]; then
+            echo "**${COUNT:-?} credential(s) found.** Values are masked below."
+            echo
+            echo '```'
+            printf '%s\n' "$OUTPUT"
+            echo '```'
+            echo
+            echo "Rotate anything real before removing it — deleting the file does"
+            echo "not undo the leak, the value stays in git history."
+          else
+            echo "The scanner could not run. This is **not** a clean result."
+            echo
+            echo '```'
+            printf '%s\n' "$OUTPUT"
+            echo '```'
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        # Exit 2 always fails: an unusable scanner must never look like a pass.
+        if [ "$STATUS" -eq 2 ]; then
+          echo "::error::git-secret-scan could not run"
+          exit 2
+        fi
+        if [ "$STATUS" -eq 1 ]; then
+          echo "::error::git-secret-scan found ${COUNT:-1} credential(s)"
+          [ "$FAIL_ON_FINDING" = "true" ] && exit 1
+        fi
+        exit 0
