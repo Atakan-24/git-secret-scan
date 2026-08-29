@@ -1,13 +1,13 @@
-"""Hängt scan.py als pre-commit-Hook in dieses Repo ein.
+"""Installs scan.py as this repository's pre-commit hook.
 
-Hooks liegen in .git/hooks/ und werden nicht mitversioniert — nach einem Klon
-muss das hier einmal laufen, sonst prüft niemand mehr.
+Hooks live in .git/hooks/ and are not versioned, so this has to run once
+after every clone — otherwise nothing is checking.
 
     python install.py
 
-Funktioniert unabhängig davon, wo dieser Ordner im Repo liegt (Wurzel oder
-z.B. tools/git-secret-scan/) — der Hook merkt sich den Pfad zu scan.py
-relativ zu SICH SELBST, nicht relativ zur Repo-Wurzel.
+Works regardless of where this folder sits inside the repository (root, or
+e.g. tools/git-secret-scan/): the generated hook resolves scan.py relative
+to *itself*, not to the repository root.
 """
 
 import subprocess
@@ -17,10 +17,16 @@ from pathlib import Path
 SCAN_PY = (Path(__file__).parent / 'scan.py').resolve()
 
 HOOK_MARKER = '# git-secret-scan pre-commit hook'
-HOOK_TEMPLATE = """#!/bin/sh
-""" + HOOK_MARKER + """
-# Blockiert Commits, in denen Zugangsdaten stecken. Umgehen: git commit --no-verify
-python "{scan_py}" --staged || exit 1
+
+# The interpreter is baked in at install time rather than relying on
+# `python` being on PATH inside the hook's environment. Git runs hooks
+# with a minimal environment, and on many systems `python` is either
+# absent or still points at Python 2 — a hook that fails to start is a
+# hook that silently stops protecting the repository.
+HOOK_TEMPLATE = f"""#!/bin/sh
+{HOOK_MARKER}
+# Blocks commits containing credentials. Bypass: git commit --no-verify
+"{{python}}" "{{scan_py}}" --staged || exit 1
 """
 
 
@@ -28,19 +34,25 @@ def main():
     root = subprocess.run(['git', 'rev-parse', '--show-toplevel'],
                           capture_output=True, text=True)
     if root.returncode != 0:
-        raise SystemExit('Kein Git-Repo hier.')
+        raise SystemExit('Not a git repository.')
+
     hooks = Path(root.stdout.strip()) / '.git' / 'hooks'
     hooks.mkdir(parents=True, exist_ok=True)
     target = hooks / 'pre-commit'
 
-    if target.exists() and HOOK_MARKER not in target.read_text(encoding='utf-8', errors='replace'):
-        backup = target.with_suffix('.vor-secret-scan')
-        backup.write_text(target.read_text(encoding='utf-8', errors='replace'), encoding='utf-8')
-        print(f'Vorhandener Hook gesichert nach {backup.name} — bitte von Hand zusammenführen.')
+    if target.exists():
+        existing = target.read_text(encoding='utf-8', errors='replace')
+        if HOOK_MARKER not in existing:
+            backup = target.with_suffix('.pre-secret-scan')
+            backup.write_text(existing, encoding='utf-8')
+            print(f'Existing hook backed up to {backup.name} — merge it by hand.')
 
-    target.write_text(HOOK_TEMPLATE.format(scan_py=SCAN_PY.as_posix()), encoding='utf-8', newline='\n')
+    target.write_text(
+        HOOK_TEMPLATE.format(python=Path(sys.executable).as_posix(),
+                             scan_py=SCAN_PY.as_posix()),
+        encoding='utf-8', newline='\n')
     target.chmod(0o755)
-    print(f'pre-commit-Hook eingerichtet: {target}')
+    print(f'pre-commit hook installed: {target}')
     return 0
 
 

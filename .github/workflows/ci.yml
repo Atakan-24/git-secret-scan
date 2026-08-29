@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # The tool is pure standard library and installs as a git hook on
+  # whatever machine a developer happens to use. That claim is only worth
+  # something if it is tested on more than one of them.
+  test:
+    name: py${{ matrix.python }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ['3.9', '3.13']
+        include:
+          - os: ubuntu-latest
+            python: '3.11'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install dev dependencies
+        run: python -m pip install --quiet pytest hypothesis coverage ruff
+
+      - name: Configure git
+        # The end-to-end tests create real repositories and real commits.
+        run: |
+          git config --global user.email "ci@example.invalid"
+          git config --global user.name "ci"
+          git config --global init.defaultBranch main
+
+      - name: Test with coverage
+        run: python -m coverage run -m pytest
+
+      - name: Coverage report (fails under 80%)
+        run: python -m coverage report
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install --quiet ruff
+      - run: python -m ruff check .
+
+  benchmark:
+    name: precision / recall gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      # Fails the build if precision or recall drops below 95%. A
+      # regression in a security tool is a silent one, so it needs a gate
+      # rather than a number someone remembers to look at.
+      - run: python benchmark/measure.py
+
+  dogfood:
+    name: scans itself
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # --history needs the full object store
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Scan tracked files
+        run: python scan.py --tracked
+      - name: Scan the entire history
+        run: python scan.py --history
