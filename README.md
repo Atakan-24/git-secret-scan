@@ -20,6 +20,8 @@ secret-scan --staged: 1 finding(s) — commit stopped
 Credentials belong in an untracked .env, not in a versioned file.
 ```
 
+<img src="demo.svg" alt="git-secret-scan blocking a commit that contains an AWS access key" width="560">
+
 ---
 
 ## Why this exists
