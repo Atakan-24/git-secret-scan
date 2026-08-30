@@ -96,6 +96,33 @@ page, and exposes a `findings` output. A scanner that cannot run exits `2`
 and **always** fails, regardless of `fail-on-finding` — an unusable check
 must never be mistaken for a passing one.
 
+## Architecture
+
+One file, three layers.
+
+**Pattern table.** `PATTERNS` in `scan.py` holds ten credential types, each
+a regex plus a `prose_prone` flag. The flag is per-pattern, not global,
+because a false-positive guard that is right for one prefix is wrong for
+another — see the first bug below.
+
+**Sources → one scanner.** Four generators — `files_staged`,
+`files_tracked`, `blobs_history`, `files_in_range` — each yield
+`(name, bytes)` pairs from a different git command (`diff --cached`,
+`ls-files`, `cat-file --batch-all-objects`, `diff <range>`). `collect()`
+feeds every pair through the same `scan_blob()` regardless of source, so
+`--staged`, `--tracked`, `--history` and `--range` are one detector with
+four inputs — a fix to detection fixes all four at once, not one at a time.
+
+**Two installation points, one scanner underneath.** `install.py` writes
+a `.git/hooks/pre-commit` script that shells out to `scan.py --staged`
+(hooks are not versioned, so this runs once per clone, with the
+interpreter path baked in rather than trusting `python` on `PATH`).
+`action.yml` wraps the same `scan.py` in a composite GitHub Action that
+resolves `--range <base>..<head>` from whatever triggered it — a pull
+request's base/head SHAs, or `before`/`GITHUB_SHA` for a push. Hook and
+Action call the identical detector; only the source of "what to scan" and
+the audience (the developer vs. every reviewer) differ.
+
 ---
 
 ## Measured, not claimed
