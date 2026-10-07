@@ -12,9 +12,11 @@ Exit code 0 = clean, 1 = findings, 2 = usage/environment error.
 Install as a pre-commit hook with install.py.
 """
 
+import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 # Each pattern carries a `prose_prone` flag.
 #
@@ -153,20 +155,30 @@ def is_binary(data: bytes) -> bool:
 
 
 def files_staged():
-    names = git('diff', '--cached', '--name-only', '--diff-filter=ACM')
-    for raw in names.split(b'\n'):
-        if not raw.strip():
+    names = git('diff', '--cached', '--name-only', '-z', '--diff-filter=ACMR')
+    for raw in names.split(b'\x00'):
+        if not raw:
             continue
-        name = raw.decode('utf-8', 'replace')
-        yield name, git('show', f':{name}', check=False)
+        name = os.fsdecode(raw)
+        yield name, git('show', f':{name}')
 
 
 def files_tracked():
-    for raw in git('ls-files', '-z').split(b'\x00'):
-        if not raw.strip():
+    root = Path(os.fsdecode(git('rev-parse', '--show-toplevel').rstrip(b'\n')))
+    for raw in git('ls-files', '--full-name', '-z', '--', ':/').split(b'\x00'):
+        if not raw:
             continue
-        name = raw.decode('utf-8', 'replace')
-        yield name, git('show', f'HEAD:{name}', check=False)
+        name = os.fsdecode(raw)
+        path = root / name
+        # A deleted tracked file has no working-tree content to scan.
+        # Symlinks contain a destination string, not the target's contents.
+        try:
+            data = os.fsencode(os.readlink(path)) if path.is_symlink() else path.read_bytes()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise GitError(f'cannot read tracked file {name!r}: {exc}') from exc
+        yield name, data
 
 
 def blobs_history():
@@ -176,7 +188,7 @@ def blobs_history():
         parts = row.split()
         if len(parts) == 2 and parts[1] == b'blob':
             sha = parts[0].decode()
-            yield f'blob {sha[:10]}', git('cat-file', 'blob', sha, check=False)
+            yield f'blob {sha[:10]}', git('cat-file', 'blob', sha)
 
 
 def files_in_range(rev_range: str):
@@ -189,13 +201,13 @@ def files_in_range(rev_range: str):
     what a pull request introduces makes the check pass on merge day and
     fail only on what the author actually added.
     """
-    names = git('diff', '--name-only', '--diff-filter=ACM', rev_range)
+    names = git('diff', '--name-only', '-z', '--diff-filter=ACMR', rev_range, '--')
     head = rev_range.split('..')[-1] or 'HEAD'
-    for raw in names.split(b'\n'):
-        if not raw.strip():
+    for raw in names.split(b'\x00'):
+        if not raw:
             continue
-        name = raw.decode('utf-8', 'replace')
-        yield name, git('show', f'{head}:{name}', check=False)
+        name = os.fsdecode(raw)
+        yield name, git('show', f'{head}:{name}')
 
 
 SOURCES = {'--staged': files_staged, '--tracked': files_tracked, '--history': blobs_history}
