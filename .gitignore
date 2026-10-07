@@ -9,5 +9,3 @@ htmlcov/
 *.egg-info/
 .venv/
 venv/
-
-build/
