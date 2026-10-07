@@ -10,6 +10,7 @@ e.g. tools/git-secret-scan/): the generated hook resolves scan.py relative
 to *itself*, not to the repository root.
 """
 
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -26,7 +27,7 @@ HOOK_MARKER = '# git-secret-scan pre-commit hook'
 HOOK_TEMPLATE = f"""#!/bin/sh
 {HOOK_MARKER}
 # Blocks commits containing credentials. Bypass: git commit --no-verify
-"{{python}}" "{{scan_py}}" --staged || exit 1
+{{python}} {{scan_py}} --staged || exit 1
 """
 
 
@@ -36,7 +37,12 @@ def main():
     if root.returncode != 0:
         raise SystemExit('Not a git repository.')
 
-    hooks = Path(root.stdout.strip()) / '.git' / 'hooks'
+    root_dir = Path(root.stdout.strip())
+    hook_path = subprocess.run(['git', 'rev-parse', '--git-path', 'hooks'], cwd=root_dir,
+                               capture_output=True, text=True, check=True)
+    hooks = Path(hook_path.stdout.strip())
+    if not hooks.is_absolute():
+        hooks = root_dir / hooks
     hooks.mkdir(parents=True, exist_ok=True)
     target = hooks / 'pre-commit'
 
@@ -44,11 +50,13 @@ def main():
         existing = target.read_text(encoding='utf-8', errors='replace')
         if HOOK_MARKER not in existing:
             backup = target.with_suffix('.pre-secret-scan')
+            if backup.exists():
+                raise SystemExit(f'Existing backup {backup} would be overwritten. Merge it first.')
             backup.write_text(existing, encoding='utf-8')
             print(f'Existing hook backed up to {backup.name} — merge it by hand.')
 
-    hook = HOOK_TEMPLATE.format(python=Path(sys.executable).as_posix(),
-                                scan_py=SCAN_PY.as_posix())
+    hook = HOOK_TEMPLATE.format(python=shlex.quote(Path(sys.executable).as_posix()),
+                                scan_py=shlex.quote(SCAN_PY.as_posix()))
     # write_bytes, not write_text: the hook is a shell script and must keep
     # LF endings on every platform — CRLF makes /bin/sh fail with a
     # famously unhelpful error. write_text(newline=…) would express that
