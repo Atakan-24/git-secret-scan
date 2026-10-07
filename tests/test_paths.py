@@ -1,12 +1,15 @@
 """Exercise Git's filename protocol and the documented working-tree mode."""
 
 import os
+import shutil
 import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 from conftest import SYNTHETIC
 from test_cli import git, run_scan
-from test_install import run_install
+from test_install import INSTALL, run_install
 
 
 @pytest.mark.parametrize('name', ['schlüssel.py', 'with\ttab.py', 'two\nlines.py'])
@@ -78,6 +81,20 @@ def test_foreign_hook_backup_is_never_overwritten(repo):
     assert run_install(repo).returncode != 0
     assert backup.read_text() == 'older original'
     assert hook.read_text() == '#!/bin/sh\necho original\n'
+
+
+def test_installed_hook_handles_shell_metacharacters_in_scanner_path(repo):
+    folder = repo / "tools ' $(printf BAD) `printf BAD`"
+    folder.mkdir()
+    shutil.copy2(INSTALL, folder / 'install.py')
+    shutil.copy2(Path(INSTALL).with_name('scan.py'), folder / 'scan.py')
+    subprocess.run([sys.executable, str(folder / 'install.py')], cwd=repo,
+                   capture_output=True, check=True)
+    (repo / 'README.md').write_text('clean change\n')
+    git(repo, 'add', 'README.md')
+    result = subprocess.run(['git', 'commit', '-q', '-m', 'clean'], cwd=repo,
+                            capture_output=True)
+    assert result.returncode == 0, result.stderr.decode(errors='replace')
 
 
 def test_git_blob_read_errors_fail_closed(scan, repo, monkeypatch):
