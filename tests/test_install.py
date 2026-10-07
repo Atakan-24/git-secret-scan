@@ -7,7 +7,6 @@ interpreter, and does not destroy a hook that was already there.
 """
 
 import os
-import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -43,8 +42,7 @@ def test_hook_references_a_real_interpreter(repo):
     """`python` is often absent or Python 2 in a hook's environment."""
     run_install(repo)
     body = (repo / '.git' / 'hooks' / 'pre-commit').read_text()
-    command = next(line for line in body.splitlines() if '--staged' in line)
-    interpreter = shlex.split(command)[0]
+    interpreter = body.split('"')[1]
     assert Path(interpreter).exists(), f'hook points at a missing interpreter: {interpreter}'
 
 
